@@ -6,8 +6,6 @@ import argparse
 import subprocess
 import tarfile
 import submodule_commits
-import string
-import random
 import shutil
 
 parser = argparse.ArgumentParser(description='Create bundles for submodules (recursively), \
@@ -16,14 +14,17 @@ parser = argparse.ArgumentParser(description='Create bundles for submodules (rec
                                               On the offline computer, use unbundle.py on the tarfile to unzip and \
                                               pull from the corresponding bundle for each repository.')
 
-parser.add_argument('filename', metavar='filename', type=str, help='file to create e.g. ../my_bundles.tar')
+parser.add_argument('filename', metavar='filename', type=str,
+                    help='file to create e.g. ../my_bundles.tar')
 parser.add_argument('commit_range', metavar='[baseline]..[target]', type=str, default='..HEAD', nargs='?',
                     help='commit range of top-level repository to bundle; defaults to everything')
 
 args = parser.parse_args()
 
+
 class IllegalArgumentError(ValueError):
     pass
+
 
 try:
     [baseline, target] = args.commit_range.split('..')
@@ -47,13 +48,17 @@ print('Making bundles to update ' + from_str + f'to {target}')
 updates_required = {}
 new_submodules = {}
 bundles = []
-
-for submodule in submodule_commits.submodule_commits('.', target):
-    new_submodules[submodule['subdir']] = submodule['commit']
+debug = False
 
 root_dir = os.getcwd()
+
+for submodule in submodule_commits.submodule_commits(root_dir, '.', target):
+    new_submodules[submodule['subdir']] = submodule['commit']
+
 tar_file_name = os.path.basename(args.filename).split('.')[0]
-temp_dir = f'temp_dir_for_{tar_file_name}_bundles'  # note this won't work if that dir already has contents
+# note this won't work if that dir already has contents
+temp_dir = f'temp_dir_for_{tar_file_name}_bundles'
+
 
 def create_bundle(submodule_dir, new_commit_sha, baseline_descriptor=''):
     bundle_path_in_temp = f'{submodule_dir}.bundle'
@@ -63,16 +68,22 @@ def create_bundle(submodule_dir, new_commit_sha, baseline_descriptor=''):
     else:
         route_to_root = (submodule_dir.count('/') + 1) * '../'
     os.makedirs(os.path.dirname(bundle_path), exist_ok=True)
-    os.chdir(submodule_dir)
-    rev_parse_output = subprocess.check_output(['git', 'rev-parse', '--abbrev-ref', 'HEAD'])
+    if debug:
+        print("{} on path {}".format(" ".join(
+            ['git', 'rev-parse', '--abbrev-ref', 'HEAD']), os.path.join(root_dir, submodule_dir)))
+    rev_parse_output = subprocess.check_output(
+        ['git', 'rev-parse', '--abbrev-ref', 'HEAD'], cwd=os.path.join(root_dir, submodule_dir))
     current_branch = rev_parse_output.decode("utf-8").strip('\n')
+    if debug:
+        print(" ".join(['git', 'bundle', 'create', route_to_root + bundle_path,
+                        f'{baseline_descriptor}{current_branch}', '--tags']))
     subprocess.run(['git', 'bundle', 'create', route_to_root + bundle_path,
-                   f'{baseline_descriptor}{current_branch}', '--tags'])
+                   f'{baseline_descriptor}{current_branch}', '--tags'], cwd=os.path.join(root_dir, submodule_dir), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     bundles.append(bundle_path_in_temp)
-    os.chdir(root_dir)
+
 
 if not full_histories:
-    for existing_commit in submodule_commits.submodule_commits('.', baseline):
+    for existing_commit in submodule_commits.submodule_commits(root_dir, '.', baseline):
         baseline_commit = existing_commit['commit']
         submodule_dir = existing_commit['subdir']
         new_commit_sha = new_submodules.pop(submodule_dir, None)
@@ -82,7 +93,8 @@ if not full_histories:
         if new_commit_sha == baseline_commit:
             # no change, no bundle
             continue
-        print(f"Need to update {submodule_dir} from {baseline_commit} to {new_commit_sha}")
+        print(
+            f"Need to update {submodule_dir} from {baseline_commit} to {new_commit_sha}")
         create_bundle(submodule_dir, new_commit_sha, f'{baseline_commit}..')
 
 for submodule_dir, commit_sha in new_submodules.items():
@@ -99,7 +111,8 @@ if not full_histories:
 create_bundle('.', target, baseline_descriptor)
 
 print("Packing bundles into tarfile:")
-with tarfile.open(args.filename, mode="w:") as tar:  # no compression; git already does that
+# no compression; git already does that
+with tarfile.open(args.filename, mode="w:") as tar:
     os.chdir(temp_dir)
     for bundle in bundles:
         print(bundle)
@@ -108,4 +121,3 @@ with tarfile.open(args.filename, mode="w:") as tar:  # no compression; git alrea
 
 print("Removing temp directory")
 shutil.rmtree(temp_dir)
-
